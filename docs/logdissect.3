@@ -1,0 +1,229 @@
+.TH LOGDISSECT 3
+.SH NAME
+The logdissect module contains utilities for parsing, merging, filtering, and exporting syslog data.
+
+.SH SYNOPSIS
+    import logdissect
+
+    # Parsing
+    myparser = logdissect.parsers.<parser>.ParseModule()
+    attribute_dict = myparser.parse_line('<RAW_LINE>')
+    file_dict = myparser.parse_file('<PATH/TO/FILE>')
+
+    # Filtering
+    myfilter = logdissect.filters.<filter>.FilterModule()
+    filterd_dict = myfilter.filter_data(file_dict, values=['<VALUE1>', '<VALUE2>'])
+
+    # Output
+    myoutput = logdissect.output.<output>.OutputModule()
+    myoutput.write_output(data, filename='FILENAME')
+
+    # Time Zones
+    entry = logdissect.utils.convert_standard_datestamp(entry)
+    entry = logdissect.utils.convert_nodate_datestamp(entry, datetimeobject)
+    entry = logdissect.utils.convert_iso_datestamp(entry)
+    entry = logdissect.utils.convert_unix_datestamp(entry)
+    entry = logdissect.utils.convert_now_datestamp(entry)
+
+    entry = logdissect.utils.get_utc_date(entry)
+
+    # Merging
+    log_dict = logdissect.utils.merge_logs(dataset, sort={True|False})
+
+.SH DESCRIPTION
+The logdissect module comes with the logdissect log analysis program. It contains objects which can be used to parse log lines and files, merge and filter logs, and output to a few formats.
+
+.SH PARSER MODULES
+\fBmyparser = logdissect.parsers.<parser>.ParseModule()\fR
+.br
+Replace <parser> with one of the available parsers:
+    \fBciscoios\fR - Cisco IOS logs
+    \fBsyslog\fR - standard syslog
+    \fBsyslogiso\fR - syslog with ISO 8601 datestamp
+    \fBsyslognohost\fR - syslog with no host attribute
+    \fBtcpdump\fR - tcpdump terminal output
+    \fBsojson\fR - logdissect single-object JSON output
+    \fBlinejson\fR - logdissect object-per-line JSON output
+    \fBwebaccess\fR - web access logs
+    \fBwindowsrsyslog\fR - Windows rsyslog agent forwarded logs
+    
+Parsers have two methods (except the sojson parser, which has no parse_line() method):
+
+\fBfile_dict = myparser.parse_file(\fI<file>\fB)\fR
+.br
+Accepts a filename as input, and returns a dictionary with some metadata, and a list of entry dictionaries (`entries`).
+
+Parsers have a \fBtzone\fR attribute that uses standard ISO 8601 offset to UTC (e.g. \fB+0500\fR, \fB-0200\fR); if not set, logdissect will attempt to get current time zone data from the local system (unless a time zone is already present, such as in the syslogiso parser, or the sojson parser).
+
+Parsers for timestamp formats with no year use file modification times to assign years to date stamps. This allows them to parse files that span more than one year without a problem. If you are copying a log file, always preserve original mtimes using `cp -p` (or `cp --preserve=timestamps`) and `scp -p`.
+
+\fBentry_dict = myparser.parse_line(\fI<line>\fB)\fR
+.br
+Accepts a log line as input, and returns a dictionary of strings. There are two built-in keys, \fBraw_text\fR and \fBparser\fR, and parsers can add their own keys.
+
+Parsers have a \fBdatestamp_type\fR attribute that defines how timestamps will be converted. The options are as follows:
+
+    \fBstandard\fR - standard syslog date stamps
+    \fBnodate\fR - time stamps with no date (i.e. tcpdump)
+    \fBiso\fR - ISO8601 timestamps
+    \fBwebaccess\fR - web access log date stamps
+    \fBunix\fR - Unix timestamps
+    \fBnow\fR - always set date stamp to time parsed
+    \fBNone\fR - skip conversion
+
+Conversion happens with any parser that has a \fBdate_stamp\fR field in \fBfields\fR (the \fBnow\fR datestamp type doesn't require a \fBdate_stamp\fR field), and adds the following attributes to the entry dictionary:
+
+    \fByear\fR - a 4-digit string (or None)
+    \fBmonth\fR - a 2-digit string
+    \fBday\fR - a 2-digit string
+    \fBtstamp\fR - a 6-digit string with optional decimal and extra places
+    \fBtzone\fR - \fB+\fR or \fB-\fR followed by a 4-digit offset to utc (HHMM)
+    \fBnumeric_date_stamp\fR - a datestamp in the form of YYYYmmddHHMMSS[.ffffff]
+    \fBdate_stamp\fR - a standard date stamp (added for `now` datestamp type only)
+
+The sojson parser has no parse_line() method.
+
+.SH Defining Custom Parser Modules
+There is a blank parser that can be used to create custom parsers on the fly.
+.br
+This example will create a parser to capture a unix timestamp with a colon followed by a message:
+
+    myparser = logdissect.parsers.blank.ParseModule()
+    myparser.name = 'my parser'
+    myparser.format_regex = '^(\\d+\.?\\d*):\\s(.*)$'
+    myparser.fields = ['date_stamp', 'message']
+    myparser.datestamp_type = 'unix'
+
+\fBmyparser\fR could then be used like any other parse module. You can also define a \fBpost_parse_action\fR method if you need to customize entries after they have been parsed. It should accept and return an entry dictionary. The inherited \fBpost_parse_action\fR method returns the entry without changing it.
+
+.SH FILTER MODULES
+\fBmyfilter = logdissect.filters.<filter>.FilterModule()\fR
+.br
+Replace <filter> with one of the available filters:
+
+    \fBsource\fR - match a log source
+    \fBrsource\fR - filter out a log source
+    \fBrange\fR - match a time range
+    \fBlast\fR - match a preceeding time range
+    \fBgrep\fR - match entries containing a regular expression
+    \fBrgrep\fR - filter out entries containing a regular expression
+    \fBshost` - match a source host
+    \fBrshost` - filter out a source host
+    \fBdhost` - match a destination host
+    \fBrdhost` - filter out a destination host
+    \fBprocess` - match a source process
+    \fBrprocess` - filter out a source process
+    \fBprotocol` - match a protocol
+    \fBrprotocol` - filter out a protocol
+
+Filters have one method, \fBfilter_values\fR. Usage for all filters except \fBlast\fR and \fBrange\fR:
+
+\fBnew_data = myfilter.filter_data(\fIdata\fR, \fIvalues=['VALUE1', 'VALUE2']\fB)\fR
+.br
+\fBdata\fR should be a log dictionary, with an \fBentries\fR value that contains a list of event dictionaries. \fBvalues\fR is a list containing strings to match or filter out.
+
+Syntax for the \fBlast\fR and \fBrange\fR filters differs slighty. Instead of \fBvalues\fR, they are passed \fBvalue\fR, which is a single string. The format of \fBvalue\fR:
+
+    \fBrange\fR filter - \fBYYYYmmddHHMMSS-YYYYmmddHHMMSS\fR (time values can be shortened; filter will fill in \fB0\fRs)
+    \fBlast\fR filter - a number, followed by either \fBm\fR for minutes, \fBh\fR for hours, or \fBd\fR for days (e.g. \fB20m\fR)
+
+Time-based filters filter on the \fBnumeric_date_stamp\fR value. The \fBrange\fR filter also has a \fButc\fR keyword argument that defaults to \fBFalse\fR. If set to \fBTrue\fR, it will filter based on \fBnumeric_date_stamp_utc\fR.
+
+.SH OUTPUT MODULES
+\fBmyoutput = logdissect.output.<output>.OutputModule()\fR
+.br
+Replace <output> with one of the available filters:
+
+    \fBlog\fR - outputs to standard log file format
+    \fBsojson\fR - outputs entry list to a single json object
+    \fBlinejson\fR - outputs one json entry dictionary object per line
+
+Output modules have one method, \fBwrite_output\fR. Usage:
+
+\fBmyoutput.write_output(\fIdata\fR, \fIfilename='FILENAME'\fB)\fR
+.br
+\fBdata\fR should be a log dictionary, with an \fBentries\fR value that contains a list of event dictionaries.
+
+The \fBlog\fR output module also has a \fBlabel\fR keyword argument with a few possible settings. If set to \fB'fname'\fR, it will add source file names to the output. If set to '\fBfpath'\fR, it will add full source file paths to the output.
+
+The \fBsojson\fR output module has a \fBpretty\fR keyword argument. If set to true, the output will be formatted in a nice, human-readable style. The default is `False`.
+
+.SH UTIL FUNCTIONS
+.SH DATE STAMP CONVERSION
+
+    import logdissect.util
+    entry = logdissect.utils.convert_standard_datestamp(entry)
+    entry = logdissect.utils.convert_nodate_datestamp(entry, datetimeobject)
+    entry = logdissect.utils.convert_iso_datestamp(entry)
+    entry = logdissect.utils.convert_webaccess_datestamp(entry)
+    entry = logdissect.utils.convert_unix_datestamp(entry)
+    entry = logdissect.utils.convert_now_datestamp(entry)
+
+The \fBnodate\fR converter uses a datetime object to assign date values. Date stamp converters assign the following fields, based on an entry dictionary's \fBdate_stamp\fR value:
+
+    \fByear\fR - a 4 digit string (set to \fBNone\fR for standard converter)
+    \fBmonth\fR - a 2 digit string
+    \fBday\fR - a 2 digit string
+    \fBtstamp\fR - a 6 digit string, with optional decimal point and fractional seconds.
+    \fBnumeric_date_stamp\fR a string with format \fBYYYYmmddHHMMSS[.ffffff]\fR (not set for standard converter)
+
+\fBlogdissect.utils\fR contains the following datestamp converters:
+
+    \fBstandard\fR - standard syslog datestamps
+    \fBnodate\fR - timestamps with no date
+    \fBiso\fR - ISO 8601 timestamps
+    \fBwebaccess\fR - web access log date stamps
+    \fBunix\fR - Unix timestamps
+    \fBnow\fR - use the current time
+
+.SH TIME ZONE
+\fBentry = logdissect.utils.get_utc_date(entry)\fR
+.br
+Sets the \fBnumeric_date_stamp_utc\fR value based on the \fBnumeric_date_stamp\fR value and the \fBtzone\fR value, and returns the entry.
+
+\fBmytimezone = logdissect.utils.get_local_tzone()\fR
+.br
+Returns the local time zone.
+
+.SH MERGING
+\fBlog_dict = logdissect.utils.merge_logs(dataset, sort={True|False})\fR
+.br
+Merges multiple log dictionaries together, and returns a single log dictionary. \fBdataset\fR is a dictionary with some metadata, and a \fBdata_set\fR value, which is a list of log dictionaries. Each log dictionary contains some metadata, and an \fBentries\fR value, which is a list of event dictionaries.
+
+If \fBsort\fR is set to \fBTrue\fR, entries will be sorted by their \fBnumeric_date_stamp_utc\fR value. Default is \fBFalse\fR.
+
+.SH SEE ALSO
+    logdissect(1)
+
+.SH FILES
+    /usr/share/doc/logdissect/README.md
+    /usr/share/doc/logdissect/README-API.md
+    /usr/share/doc/logdissect/CONTRIBUTING.md
+    /usr/share/doc/logdissect/CHANGELOG.md
+    /usr/share/doc/logdissect/LICENSE
+
+.SH AUTHOR
+    Dan Persons (dpersonsdev@gmail.com)
+
+.SH COPYRIGHT
+MIT License
+
+Copyright (c) 2017 Dan Persons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
