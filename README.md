@@ -10,6 +10,7 @@
   - [Parsers](#parsers)
   - [Examples](#examples)
   - [Notes](#notes)
+  - [Export service](#export-service-http)
 - [Community](#community)
   - [Module](#api)
   - [Support](#support)
@@ -115,6 +116,32 @@ windowsrsyslog  : windows rsyslog agent log parsing module
 4. --last options: The last option should be a number followed by either 's' for seconds, 'm' for minutes, 'h' for hours, or 'd' for days (e.g. --last=20m).
 
 5. Multiple options: All non-time-based filters can be used more than once.
+
+## Export service (HTTP)
+
+`python -m logdissect.service` runs a local resident export service (thread-pool HTTP server, defaults to `127.0.0.1:8123`). Job state is kept in sidecar JSON files under `--jobs-dir` (`.logdissect-jobs` by default), so jobs survive a process restart: interrupted jobs are marked `failed` with an `interrupted by process restart` error and completed jobs stay queryable.
+
+- `POST /export` — submit an export job (`202 Accepted`). JSON body:
+
+      {
+        "sources": ["/var/log/messages"],
+        "output_path": "out.csv",
+        "format": "csv",
+        "parser": null,
+        "start": "202602272130",
+        "end": "202602272135",
+        "keep_unknown": false,
+        "overwrite": false
+      }
+
+  Only `sources` and `output_path` are required. `format` is `csv` or `jsonl`; omit `parser` for auto-detection. `start`/`end` form a closed interval over parsed timestamps (`YYYYMMDDHHMMSS`, shorter bounds are padded). Lines that fail to parse are dropped unless `keep_unknown` is true; kept unknown rows never contribute to the report time span. An existing destination returns `409 Conflict` unless `overwrite` is true, and concurrent jobs targeting the same path are serialized. Writes go to a temp file followed by an atomic rename. CSV columns and JSONL keys come from the same ordered field list.
+- `GET /jobs/{id}` — job state and stats (queued/running/completed/failed, hit count, scanned/dropped/excluded counts, time span, per-format distribution).
+- `GET /jobs/{id}/report` — HTML summary page with the hit count, time span (parsed entries only), and format distribution.
+
+Example:
+
+    curl -X POST http://127.0.0.1:8123/export -H "Content-Type: application/json" -d '{"sources":["messages"],"output_path":"out.csv"}'
+    curl http://127.0.0.1:8123/jobs/$JOB_ID/report
 
 # Community
 
